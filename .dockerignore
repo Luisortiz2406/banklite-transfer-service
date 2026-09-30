@@ -1,0 +1,8 @@
+# No enviar al contexto de Docker dependencias locales, builds ni secretos.
+node_modules
+dist
+*.tsbuildinfo
+*.log
+.env
+.env.*
+!.env.example

@@ -12,6 +12,12 @@ import { Repository } from 'typeorm';
 import { PrepareTransferDto } from './dto/prepare-transfer.dto';
 import { TransferRequest } from './entities/transfer-request.entity';
 
+// Una confirmación que lleva más de esto en 'processing' se considera abandonada
+// (p. ej. el servicio se reinició a mitad de camino) y puede reintentarse. Es
+// seguro porque Ledger es idempotente por idempotencyKey: si la transferencia
+// ya se registró, devuelve la misma transacción en vez de duplicarla.
+const STALE_PROCESSING_MS = 60_000;
+
 @Injectable()
 export class TransfersService {
   constructor(
@@ -51,14 +57,21 @@ export class TransfersService {
     const request = await this.requests.findOne({ where: { id, userId } });
     if (!request) throw new NotFoundException('Solicitud de transferencia no encontrada.');
     if (request.status === 'completed') return this.publicRequest(request);
-    if (request.status === 'processing') {
-      throw new ConflictException('La transferencia ya está siendo procesada.');
+    if (request.status === 'cancelled') {
+      throw new ConflictException('La solicitud fue cancelada.');
     }
 
-    const claim = await this.requests.update(
-      { id, userId, status: 'pending' },
-      { status: 'processing' },
-    );
+    // Reclama la solicitud de forma atómica: pendiente, o 'processing' abandonada.
+    const claim = await this.requests
+      .createQueryBuilder()
+      .update(TransferRequest)
+      .set({ status: 'processing' })
+      .where('id = :id AND user_id = :userId', { id, userId })
+      .andWhere(
+        "(status = 'pending' OR (status = 'processing' AND updated_at < :stale))",
+        { stale: new Date(Date.now() - STALE_PROCESSING_MS) },
+      )
+      .execute();
     if (claim.affected !== 1) {
       const latest = await this.requests.findOne({ where: { id, userId } });
       if (latest?.status === 'completed') return this.publicRequest(latest);
