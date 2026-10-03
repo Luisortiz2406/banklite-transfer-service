@@ -11,5 +11,6 @@ ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm install --omit=dev
 COPY --from=build /app/dist ./dist
+COPY scripts/ensure-db.js ./scripts/ensure-db.js
 EXPOSE 3008
-CMD ["node", "dist/main"]
+CMD ["sh", "-c", "node scripts/ensure-db.js && node dist/main"]
