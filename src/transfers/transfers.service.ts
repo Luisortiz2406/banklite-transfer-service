@@ -1,5 +1,7 @@
 import {
   BadGatewayException,
+  BadRequestException,
+  ForbiddenException,
   ConflictException,
   HttpException,
   Injectable,
@@ -53,13 +55,16 @@ export class TransfersService {
     }
   }
 
-  async confirm(id: string, userId: string, accessToken: string) {
+  async confirm(id: string, userId: string, accessToken: string, dynamicCode: string) {
     const request = await this.requests.findOne({ where: { id, userId } });
     if (!request) throw new NotFoundException('Solicitud de transferencia no encontrada.');
     if (request.status === 'completed') return this.publicRequest(request);
     if (request.status === 'cancelled') {
       throw new ConflictException('La solicitud fue cancelada.');
     }
+
+    // Como en los bancos: sin clave dinámica válida no se mueve dinero.
+    await this.verifyDynamicKey(userId, dynamicCode);
 
     // Reclama la solicitud de forma atómica: pendiente, o 'processing' abandonada.
     const claim = await this.requests
@@ -110,6 +115,34 @@ export class TransfersService {
     if (result.affected !== 1) throw new ConflictException('La solicitud ya está siendo procesada.');
     request.status = 'cancelled';
     return this.publicRequest(request);
+  }
+
+  /** Valida la clave dinámica con Auth Service (red interna, INTERNAL_API_KEY). */
+  private async verifyDynamicKey(userId: string, code: string): Promise<void> {
+    const baseUrl = this.config.get<string>('AUTH_SERVICE_URL', 'http://localhost:3001');
+    const key = this.config.get<string>('INTERNAL_API_KEY');
+    if (!key) throw new ServiceUnavailableException('INTERNAL_API_KEY no está configurada en Transfer Service.');
+
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/internal/dynamic-key/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-internal-key': key },
+        body: JSON.stringify({ idUser: userId, code }),
+        signal: AbortSignal.timeout(10000),
+      });
+    } catch {
+      throw new ServiceUnavailableException('No se pudo validar la clave dinámica. Inténtalo de nuevo.');
+    }
+
+    const payload = await response.json().catch(() => ({}));
+    if (response.status === 403 && /clave dinámica/i.test(payload?.message || '')) {
+      throw new ForbiddenException(payload.message);
+    }
+    if (!response.ok) throw new ServiceUnavailableException('No se pudo validar la clave dinámica. Inténtalo de nuevo.');
+    if (payload?.valid !== true) {
+      throw new BadRequestException(payload?.message || 'Clave dinámica incorrecta o vencida.');
+    }
   }
 
   private async postToLedger(request: TransferRequest, accessToken: string): Promise<{ id?: string }> {

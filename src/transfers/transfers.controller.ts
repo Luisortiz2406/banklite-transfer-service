@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { ConfirmTransferDto } from './dto/confirm-transfer.dto';
 import { PrepareTransferDto } from './dto/prepare-transfer.dto';
 import { TransfersService } from './transfers.service';
 
@@ -20,8 +21,8 @@ export class TransfersController {
   }
 
   @Post(':id/confirm')
-  confirm(@Param('id', ParseUUIDPipe) id: string, @Req() request: Request) {
-    return this.transfers.confirm(id, (request as any).user.idUser, (request as any).accessToken);
+  confirm(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmTransferDto, @Req() request: Request) {
+    return this.transfers.confirm(id, (request as any).user.idUser, (request as any).accessToken, dto.dynamicCode);
   }
 
   @Post(':id/cancel')
