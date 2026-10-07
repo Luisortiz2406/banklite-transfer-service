@@ -13,7 +13,7 @@ export class JwtAuthGuard implements CanActivate {
     if (!header?.startsWith('Bearer ')) throw new UnauthorizedException('Token no proporcionado');
     try {
       const token = header.slice('Bearer '.length);
-      const payload = this.jwt.verify(token, { secret: this.config.get<string>('JWT_SECRET') });
+      const payload = this.jwt.verify(token, { secret: this.config.get<string>('JWT_SECRET'), algorithms: ['HS256'] });
       if (payload.type !== 'access' || !payload.sub) throw new UnauthorizedException();
       (request as any).user = { idUser: payload.sub };
       (request as any).accessToken = token;

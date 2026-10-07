@@ -4,10 +4,22 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { HealthController } from './health.controller';
 import { TransferRequest } from './transfers/entities/transfer-request.entity';
 import { TransfersModule } from './transfers/transfers.module';
+import { validateEnv } from './config/env.validation';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: '.env',
+      validate: validateEnv(
+        [
+        { key: 'JWT_SECRET', type: 'secret' },
+        { key: 'INTERNAL_API_KEY', type: 'secret' },
+        { key: 'DATABASE_URL', type: 'url' },
+      ],
+        ['JWT_SECRET', 'INTERNAL_API_KEY'],
+      ),
+    }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
