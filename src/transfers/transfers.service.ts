@@ -11,7 +11,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { PrepareTransferDto } from './dto/prepare-transfer.dto';
+import { PrepareTransferDto, WALLETS } from './dto/prepare-transfer.dto';
 import { TransferRequest } from './entities/transfer-request.entity';
 
 // Una confirmación que lleva más de esto en 'processing' se considera abandonada
@@ -19,6 +19,12 @@ import { TransferRequest } from './entities/transfer-request.entity';
 // seguro porque Ledger es idempotente por idempotencyKey: si la transferencia
 // ya se registró, devuelve la misma transacción en vez de duplicarla.
 const STALE_PROCESSING_MS = 60_000;
+
+// Igual que account-service: correo y @llave en minúsculas; celular y cédula sin espacios, puntos ni guiones.
+function normalizeKey(raw: string): string {
+  const value = String(raw ?? '').trim();
+  return value.includes('@') ? value.toLowerCase() : value.replace(/[\s.-]/g, '');
+}
 
 @Injectable()
 export class TransfersService {
@@ -34,10 +40,32 @@ export class TransfersService {
       return this.publicRequest(existing);
     }
 
+    let destination: { accountNumber: string; key: string | null; holderName: string | null };
+    let external: Pick<TransferRequest, 'destinationBank' | 'destinationAccountType' | 'externalAccountNumber'> =
+      { destinationBank: null, destinationAccountType: null, externalAccountNumber: null };
+    if (dto.destinationBank) {
+      // Otro banco o billetera: el dinero sale por la cuenta de compensación del
+      // ledger, que no valida al titular; por eso se valida aquí que la cuenta sea suya.
+      external = this.externalDestination(dto);
+      await this.assertOwnAccount(dto.sourceAccountId, userId);
+      destination = { accountNumber: '', key: null, holderName: dto.recipientName.trim() };
+    } else if (dto.destinationKey) {
+      // Con llave Bre-B, account-service dice a qué cuenta llega (por la red interna).
+      destination = await this.resolveKey(dto.destinationKey);
+    } else {
+      if (!/^\d{11}$/.test(dto.destinationAccountNumber ?? '')) {
+        throw new BadRequestException('El número de cuenta Banklite debe tener 11 dígitos.');
+      }
+      destination = { accountNumber: dto.destinationAccountNumber, key: null, holderName: null };
+    }
+
     const request = this.requests.create({
       userId,
       sourceAccountId: dto.sourceAccountId,
-      destinationAccountNumber: dto.destinationAccountNumber,
+      destinationAccountNumber: destination.accountNumber,
+      destinationKey: destination.key,
+      recipientName: destination.holderName,
+      ...external,
       amount: dto.amount.toFixed(2),
       description: dto.description?.trim() || 'Transferencia',
       idempotencyKey: dto.idempotencyKey,
@@ -145,23 +173,77 @@ export class TransfersService {
     }
   }
 
+  /** Valida los datos de un envío a otro banco o billetera. */
+  private externalDestination(dto: PrepareTransferDto) {
+    const bank = dto.destinationBank;
+    const isWallet = WALLETS.includes(bank);
+    const number = String(dto.destinationAccountNumber ?? '');
+    if (isWallet && !/^3\d{9}$/.test(number)) {
+      throw new BadRequestException(`El número de ${bank} es un celular de 10 dígitos que empieza por 3.`);
+    }
+    if (!isWallet && !/^\d{6,16}$/.test(number)) {
+      throw new BadRequestException('El número de cuenta debe tener entre 6 y 16 dígitos.');
+    }
+    if (!isWallet && !dto.destinationAccountType) throw new BadRequestException('Elige el tipo de cuenta.');
+    if (!dto.recipientName || dto.recipientName.trim().length < 3) {
+      throw new BadRequestException('Escribe el nombre de quien recibe.');
+    }
+    return {
+      destinationBank: bank,
+      destinationAccountType: isWallet ? null : dto.destinationAccountType,
+      externalAccountNumber: number,
+    };
+  }
+
+  /** La cuenta de origen es del usuario y está activa (account-service, red interna). */
+  private async assertOwnAccount(accountId: string, userId: string) {
+    const baseUrl = this.config.get<string>('ACCOUNT_SERVICE_URL', 'http://localhost:3002');
+    const key = this.config.get<string>('INTERNAL_API_KEY');
+    if (!key) throw new ServiceUnavailableException('INTERNAL_API_KEY no está configurada en Transfer Service.');
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/internal/accounts/${encodeURIComponent(accountId)}/ledger-info`, {
+        headers: { 'x-internal-key': key },
+        signal: AbortSignal.timeout(10000),
+      });
+    } catch {
+      throw new ServiceUnavailableException('No se pudo validar tu cuenta. Inténtalo de nuevo.');
+    }
+    if (response.status === 404) throw new NotFoundException('Cuenta de origen no encontrada.');
+    if (!response.ok) throw new ServiceUnavailableException('No se pudo validar tu cuenta. Inténtalo de nuevo.');
+    const account = await response.json();
+    if (account.idUser !== userId || account.accountType === 'merchant') {
+      throw new ForbiddenException('La cuenta de origen no te pertenece.');
+    }
+    if (account.status !== 'active') throw new BadRequestException('Tu cuenta no está activa, por eso no puedes transferir.');
+  }
+
   private async postToLedger(request: TransferRequest, accessToken: string): Promise<{ id?: string }> {
     const baseUrl = this.config.get<string>('LEDGER_SERVICE_URL', 'http://localhost:3006');
     let response: Response;
     try {
-      response = await fetch(`${baseUrl}/ledger/transfers`, {
+      // Otro banco: cargo hacia la cuenta de compensación (ledger, red interna);
+      // entre cuentas Banklite: transferencia con el token del cliente.
+      const external = !!request.destinationBank;
+      response = await fetch(`${baseUrl}${external ? '/ledger/internal/debits' : '/ledger/transfers'}`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          sourceAccountId: request.sourceAccountId,
-          destinationAccountNumber: request.destinationAccountNumber,
-          amount: Number(request.amount),
-          description: request.description,
-          idempotencyKey: request.idempotencyKey,
-        }),
+        headers: external
+          ? { 'x-internal-key': this.config.get<string>('INTERNAL_API_KEY') ?? '', 'Content-Type': 'application/json' }
+          : { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(external
+          ? {
+              accountId: request.sourceAccountId,
+              amount: Number(request.amount),
+              description: this.externalDescription(request),
+              idempotencyKey: request.idempotencyKey,
+            }
+          : {
+              sourceAccountId: request.sourceAccountId,
+              destinationAccountNumber: request.destinationAccountNumber,
+              amount: Number(request.amount),
+              description: request.description,
+              idempotencyKey: request.idempotencyKey,
+            }),
         signal: AbortSignal.timeout(15000),
       });
     } catch {
@@ -179,11 +261,45 @@ export class TransfersService {
     return payload;
   }
 
+  /** Cuenta destino de una llave Bre-B (account-service, red interna). */
+  private async resolveKey(rawKey: string): Promise<{ accountNumber: string; key: string; holderName: string }> {
+    const baseUrl = this.config.get<string>('ACCOUNT_SERVICE_URL', 'http://localhost:3002');
+    const key = this.config.get<string>('INTERNAL_API_KEY');
+    if (!key) throw new ServiceUnavailableException('INTERNAL_API_KEY no está configurada en Transfer Service.');
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/internal/accounts/keys/resolve?key=${encodeURIComponent(rawKey)}`, {
+        headers: { 'x-internal-key': key },
+        signal: AbortSignal.timeout(10000),
+      });
+    } catch {
+      throw new ServiceUnavailableException('No se pudo consultar la llave Bre-B. Inténtalo de nuevo.');
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (response.status === 404 || response.status === 400) {
+      throw new HttpException(payload?.message || 'No encontramos esa llave en Banklite.', response.status);
+    }
+    if (!response.ok) throw new ServiceUnavailableException('No se pudo consultar la llave Bre-B. Inténtalo de nuevo.');
+    return { accountNumber: payload.accountNumber, key: payload.key, holderName: payload.holderName };
+  }
+
+  // Descripción en el movimiento: así se reconoce en el historial como transferencia a otro banco.
+  private externalDescription(request: TransferRequest): string {
+    const account = `${request.destinationAccountType ? request.destinationAccountType + ' ' : ''}···· ${request.externalAccountNumber.slice(-4)}`;
+    const concept = request.description && request.description !== 'Transferencia' ? ` · ${request.description}` : '';
+    return `Transferencia a ${request.destinationBank} · ${account} · ${request.recipientName}${concept}`.slice(0, 140);
+  }
+
   private assertSameRequest(request: TransferRequest, dto: PrepareTransferDto, userId: string) {
+    const sameDestination = dto.destinationBank
+      ? request.destinationBank === dto.destinationBank && request.externalAccountNumber === dto.destinationAccountNumber
+      : dto.destinationKey
+        ? request.destinationKey === normalizeKey(dto.destinationKey)
+        : request.destinationAccountNumber === dto.destinationAccountNumber;
     if (
       request.userId !== userId ||
       request.sourceAccountId !== dto.sourceAccountId ||
-      request.destinationAccountNumber !== dto.destinationAccountNumber ||
+      !sameDestination ||
       Number(request.amount) !== Number(dto.amount)
     ) {
       throw new ConflictException('La clave de idempotencia ya se usó para otra solicitud.');
@@ -194,7 +310,13 @@ export class TransfersService {
     return {
       id: request.id,
       sourceAccountId: request.sourceAccountId,
-      destinationAccountNumber: request.destinationAccountNumber,
+      // Con llave, quien envía no ve el número de cuenta de quien recibe.
+      destinationAccountNumber: request.destinationKey || request.destinationBank ? null : request.destinationAccountNumber,
+      destinationAccountLast4: (request.externalAccountNumber || request.destinationAccountNumber).slice(-4),
+      destinationBank: request.destinationBank,
+      destinationAccountType: request.destinationAccountType,
+      destinationKey: request.destinationKey,
+      recipientName: request.recipientName,
       amount: Number(request.amount),
       description: request.description,
       status: request.status,

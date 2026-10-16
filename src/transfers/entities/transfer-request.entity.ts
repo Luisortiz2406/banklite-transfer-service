@@ -15,6 +15,25 @@ export class TransferRequest {
   @Column({ name: 'destination_account_number', type: 'varchar', length: 11 })
   destinationAccountNumber: string;
 
+  // Envío con llave Bre-B: la llave y el nombre enmascarado del titular. En ese
+  // caso el número de cuenta destino nunca se le muestra a quien envía.
+  @Column({ name: 'destination_key', type: 'varchar', length: 120, nullable: true })
+  destinationKey: string | null;
+
+  @Column({ name: 'recipient_name', type: 'varchar', length: 80, nullable: true })
+  recipientName: string | null;
+
+  // Envío a otro banco o billetera (destino de demostración: no hay conexión con
+  // la red interbancaria). Aquí destination_account_number queda vacío.
+  @Column({ name: 'destination_bank', type: 'varchar', length: 40, nullable: true })
+  destinationBank: string | null;
+
+  @Column({ name: 'destination_account_type', type: 'varchar', length: 10, nullable: true })
+  destinationAccountType: string | null;
+
+  @Column({ name: 'external_account_number', type: 'varchar', length: 16, nullable: true })
+  externalAccountNumber: string | null;
+
   @Column({ type: 'numeric', precision: 18, scale: 2 })
   amount: string;
 
