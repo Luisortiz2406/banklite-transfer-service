@@ -1,0 +1,147 @@
+# Transfer Service (`transfer-service`)
+
+Transferencias del cliente: a cuentas BankLite, con llave Bre-B y a otros bancos (simulado).
+
+Parte de **BankLite**, banco digital académico construido con microservicios. Cada
+microservicio tiene su propia base de datos y se comunica con los demás por HTTP
+(red interna) o por eventos en RabbitMQ.
+
+## Responsabilidad dentro de la arquitectura
+
+Orquesta el envío de dinero que inicia el cliente en dos pasos: **preparar** (valida
+destino, monto y dueño de la cuenta origen) y **confirmar** con la clave dinámica, que
+es cuando se registra en ledger-service. Guarda cada solicitud con su estado para
+que reintentar la confirmación no cobre dos veces.
+
+**Reglas de negocio principales**
+
+- Monto mínimo por envío publicado en `GET /transfers/catalog` (hoy $1.000); aplica solo a las transferencias del cliente.
+- La cuenta origen debe ser del usuario; destino distinto del origen.
+- Confirmación con clave dinámica (auth-service); la `idempotencyKey` se reenvía al ledger y evita cobros dobles.
+- Estados `pending`, `processing`, `completed` y `cancelled`; si el ledger no responde, la confirmación se reintenta con la misma clave sin cobrar dos veces.
+- Envíos a otros bancos: no hay red interbancaria real; se dice en la interfaz.
+
+**Comunicación con otros servicios**
+
+| | |
+|---|---|
+| Publica eventos | — |
+| Consume eventos | — |
+| Llama a | account-service: cuenta origen, destino por número o llave Bre-B<br>auth-service: clave dinámica<br>ledger-service: `POST /ledger/transfers` |
+| Lo llaman | api-gateway (rutas `/transfers/*`) |
+| Integraciones externas | — |
+
+Todo el tráfico externo entra por el **api-gateway** (único servicio público), que
+enruta por prefijo (`/transfers`), aplica CORS y límite de peticiones, y bloquea las
+rutas internas.
+
+## Tecnologías
+
+- Node.js 20, NestJS 10 y TypeScript
+- PostgreSQL con TypeORM (`synchronize: true`: las tablas se crean desde las entidades)
+- JWT (`@nestjs/jwt`) y `class-validator` para validar todo lo que entra
+- Docker (imagen `node:20-alpine`) y despliegue en Railway
+
+## Base de datos (`transfer_db`)
+
+| Tabla | Contenido |
+|---|---|
+| `transfer_requests` | Solicitudes de transferencia, estado y transacción del ledger. |
+
+En `database/`:
+
+| Archivo | Qué es |
+|---|---|
+| `schema.sql` | Esquema (tablas, índices, restricciones), generado con `pg_dump --schema-only` desde la base que crea TypeORM. |
+| `seed.sql` | Datos de ejemplo de un escenario de demo compartido por todos los servicios (clientes ficticios Ana y Carlos, con los mismos UUID en todas las bases). |
+| `backup.sql` | Respaldo completo (esquema + datos de ejemplo) listo para restaurar. |
+
+Restaurar en una base vacía:
+
+```bash
+createdb transfer_db
+psql "postgres://usuario:clave@localhost:5432/transfer_db" -f database/backup.sql
+# o, por partes:
+psql "$DATABASE_URL" -f database/schema.sql -f database/seed.sql
+```
+
+Si se arranca el servicio con una base vacía, TypeORM crea las tablas solo.
+
+## Instalación y ejecución
+
+Requisitos: Node.js 20, PostgreSQL 16.
+
+```bash
+npm ci
+cp .env.example .env     # completa los secretos (ver abajo)
+npm run start:dev        # desarrollo, recarga al guardar
+# producción:
+npm run build && npm run start:prod
+```
+
+Con Docker:
+
+```bash
+docker build -t banklite-transfer-service .
+docker run --env-file .env -p 3008:3008 banklite-transfer-service
+```
+
+El sistema completo (los 12 servicios, Postgres, RabbitMQ y el gateway) se levanta
+desde el repositorio principal con `docker compose up -d --build`.
+
+Comprobar: `curl http://localhost:3008/health`
+
+## Endpoints principales
+
+A través del gateway las rutas son las mismas (`http://localhost:8080/transfers/...`).
+
+### Públicos (sin sesión)
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| GET | `/health` | Estado del servicio (incluye si la conexión a la base quedó inicializada). |
+| GET | `/transfers/catalog` | Monto mínimo por envío. |
+
+### Del cliente (`Authorization: Bearer <token de acceso>`)
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| GET | `/transfers` | Transferencias del cliente. |
+| POST | `/transfers/prepare` | Prepara una transferencia (valida destino y monto). |
+| POST | `/transfers/:id/confirm` | Confirma con la clave dinámica y la registra en el ledger. |
+| POST | `/transfers/:id/cancel` | Cancela una transferencia pendiente. |
+
+## Variables de entorno
+
+Ver `.env.example`. Los secretos se generan con
+`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` (uno distinto
+por variable). El servicio **no arranca** si un secreto falta, es corto, es un valor de
+ejemplo o se repite entre dos variables (`src/config/env.validation.ts`). En Railway
+todas se configuran como variables del servicio, nunca en el código.
+
+| Variable | Obligatoria | Ejemplo / por defecto | Para qué sirve |
+|---|---|---|---|
+| `NODE_ENV` | No | `development` | `development` en local; `production` en Railway (lo fija el Dockerfile). |
+| `PORT` | No | `3008` | Puerto HTTP del servicio. |
+| `DATABASE_URL` | **Sí** (no arranca sin ella) | `postgres://transfer_svc:<DB_PASSWORD_TRANSFER>@localhost:5432/transfer_db` | Conexión a PostgreSQL de **su** base (rol propio, sin acceso a las demás). |
+| `JWT_SECRET` | **Sí** (no arranca sin ella) | — | Firma de los JWT de clientes (el mismo valor que en auth-service). |
+| `LEDGER_SERVICE_URL` | Sí | `http://localhost:3006` | URL interna de ledger-service. |
+| `AUTH_SERVICE_URL` | Sí | `http://localhost:3001` | URL interna de auth-service. |
+| `ACCOUNT_SERVICE_URL` | Sí | `http://localhost:3002` | URL interna de account-service. |
+| `INTERNAL_API_KEY` | **Sí** (no arranca sin ella) | — | Clave interna **propia** de este servicio; la manda en `x-internal-key` al llamar a otros. |
+| `HTTP_READ_RETRIES` | No | `1` | Reintentos de las lecturas (GET) a otros servicios; las escrituras no se reintentan. |
+
+## Pruebas
+
+Las reglas de negocio se prueban de punta a punta con los scripts de `scripts/pruebas/` del repositorio principal.
+
+## Despliegue
+
+Desplegado en Railway (raíz del servicio: esta carpeta, `railway.json` con
+`healthcheckPath: /health`). El servicio no tiene dominio público propio: se accede
+por el gateway.
+
+- Estado de todos los servicios (incluye `transfer-service`): https://api-gateway-production-dd7f.up.railway.app/health
+- Endpoint público de prueba: https://api-gateway-production-dd7f.up.railway.app/transfers/catalog
+- Rutas de este servicio: `https://api-gateway-production-dd7f.up.railway.app/transfers/...`
+- Aplicación web: https://frontend-production-eff3c.up.railway.app
