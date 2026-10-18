@@ -41,8 +41,11 @@ export class TransfersService {
     }
 
     let destination: { accountNumber: string; key: string | null; holderName: string | null };
-    let external: Pick<TransferRequest, 'destinationBank' | 'destinationAccountType' | 'externalAccountNumber'> =
-      { destinationBank: null, destinationAccountType: null, externalAccountNumber: null };
+    let external: Pick<TransferRequest, 'destinationBank' | 'destinationAccountType' | 'externalAccountNumber'> = {
+      destinationBank: null,
+      destinationAccountType: null,
+      externalAccountNumber: null,
+    };
     if (dto.destinationBank) {
       // Otro banco o billetera: el dinero sale por la cuenta de compensación del
       // ledger, que no valida al titular; por eso se valida aquí que la cuenta sea suya.
@@ -100,10 +103,9 @@ export class TransfersService {
       .update(TransferRequest)
       .set({ status: 'processing' })
       .where('id = :id AND user_id = :userId', { id, userId })
-      .andWhere(
-        "(status = 'pending' OR (status = 'processing' AND updated_at < :stale))",
-        { stale: new Date(Date.now() - STALE_PROCESSING_MS) },
-      )
+      .andWhere("(status = 'pending' OR (status = 'processing' AND updated_at < :stale))", {
+        stale: new Date(Date.now() - STALE_PROCESSING_MS),
+      })
       .execute();
     if (claim.affected !== 1) {
       const latest = await this.requests.findOne({ where: { id, userId } });
@@ -167,7 +169,8 @@ export class TransfersService {
     if (response.status === 403 && /clave dinámica/i.test(payload?.message || '')) {
       throw new ForbiddenException(payload.message);
     }
-    if (!response.ok) throw new ServiceUnavailableException('No se pudo validar la clave dinámica. Inténtalo de nuevo.');
+    if (!response.ok)
+      throw new ServiceUnavailableException('No se pudo validar la clave dinámica. Inténtalo de nuevo.');
     if (payload?.valid !== true) {
       throw new BadRequestException(payload?.message || 'Clave dinámica incorrecta o vencida.');
     }
@@ -215,7 +218,8 @@ export class TransfersService {
     if (account.idUser !== userId || account.accountType === 'merchant') {
       throw new ForbiddenException('La cuenta de origen no te pertenece.');
     }
-    if (account.status !== 'active') throw new BadRequestException('Tu cuenta no está activa, por eso no puedes transferir.');
+    if (account.status !== 'active')
+      throw new BadRequestException('Tu cuenta no está activa, por eso no puedes transferir.');
   }
 
   private async postToLedger(request: TransferRequest, accessToken: string): Promise<{ id?: string }> {
@@ -230,20 +234,22 @@ export class TransfersService {
         headers: external
           ? { 'x-internal-key': this.config.get<string>('INTERNAL_API_KEY') ?? '', 'Content-Type': 'application/json' }
           : { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(external
-          ? {
-              accountId: request.sourceAccountId,
-              amount: Number(request.amount),
-              description: this.externalDescription(request),
-              idempotencyKey: request.idempotencyKey,
-            }
-          : {
-              sourceAccountId: request.sourceAccountId,
-              destinationAccountNumber: request.destinationAccountNumber,
-              amount: Number(request.amount),
-              description: request.description,
-              idempotencyKey: request.idempotencyKey,
-            }),
+        body: JSON.stringify(
+          external
+            ? {
+                accountId: request.sourceAccountId,
+                amount: Number(request.amount),
+                description: this.externalDescription(request),
+                idempotencyKey: request.idempotencyKey,
+              }
+            : {
+                sourceAccountId: request.sourceAccountId,
+                destinationAccountNumber: request.destinationAccountNumber,
+                amount: Number(request.amount),
+                description: request.description,
+                idempotencyKey: request.idempotencyKey,
+              },
+        ),
         signal: AbortSignal.timeout(15000),
       });
     } catch {
@@ -292,7 +298,8 @@ export class TransfersService {
 
   private assertSameRequest(request: TransferRequest, dto: PrepareTransferDto, userId: string) {
     const sameDestination = dto.destinationBank
-      ? request.destinationBank === dto.destinationBank && request.externalAccountNumber === dto.destinationAccountNumber
+      ? request.destinationBank === dto.destinationBank &&
+        request.externalAccountNumber === dto.destinationAccountNumber
       : dto.destinationKey
         ? request.destinationKey === normalizeKey(dto.destinationKey)
         : request.destinationAccountNumber === dto.destinationAccountNumber;
@@ -311,7 +318,8 @@ export class TransfersService {
       id: request.id,
       sourceAccountId: request.sourceAccountId,
       // Con llave, quien envía no ve el número de cuenta de quien recibe.
-      destinationAccountNumber: request.destinationKey || request.destinationBank ? null : request.destinationAccountNumber,
+      destinationAccountNumber:
+        request.destinationKey || request.destinationBank ? null : request.destinationAccountNumber,
       destinationAccountLast4: (request.externalAccountNumber || request.destinationAccountNumber).slice(-4),
       destinationBank: request.destinationBank,
       destinationAccountType: request.destinationAccountType,

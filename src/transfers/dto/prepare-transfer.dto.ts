@@ -1,8 +1,26 @@
-import { IsIn, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateIf } from 'class-validator';
+import {
+  IsIn,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+  ValidateIf,
+} from 'class-validator';
 
 // Entidades de otros bancos y billeteras a las que se puede enviar.
 export const EXTERNAL_BANKS = [
-  'Bancolombia', 'Banco de Bogotá', 'Davivienda', 'BBVA Colombia', 'Banco de Occidente', 'Nequi', 'DaviPlata', 'Otra entidad',
+  'Bancolombia',
+  'Banco de Bogotá',
+  'Davivienda',
+  'BBVA Colombia',
+  'Banco de Occidente',
+  'Nequi',
+  'DaviPlata',
+  'Otra entidad',
 ] as const;
 // En las billeteras el "número de cuenta" es el celular.
 export const WALLETS: readonly string[] = ['Nequi', 'DaviPlata'];

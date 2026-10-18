@@ -13,10 +13,10 @@ import { validateEnv } from './config/env.validation';
       envFilePath: '.env',
       validate: validateEnv(
         [
-        { key: 'JWT_SECRET', type: 'secret' },
-        { key: 'INTERNAL_API_KEY', type: 'secret' },
-        { key: 'DATABASE_URL', type: 'url' },
-      ],
+          { key: 'JWT_SECRET', type: 'secret' },
+          { key: 'INTERNAL_API_KEY', type: 'secret' },
+          { key: 'DATABASE_URL', type: 'url' },
+        ],
         ['JWT_SECRET', 'INTERNAL_API_KEY'],
       ),
     }),

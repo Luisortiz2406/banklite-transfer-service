@@ -31,7 +31,10 @@ export interface TrustedKey {
 
 /** Interpreta INTERNAL_TRUSTED_KEYS. Lanza un error si el formato o una clave no son válidos. */
 export function parseTrustedKeys(raw: string | undefined): TrustedKey[] {
-  const entries = (raw ?? '').split(',').map((e) => e.trim()).filter(Boolean);
+  const entries = (raw ?? '')
+    .split(',')
+    .map((e) => e.trim())
+    .filter(Boolean);
   return entries.map((entry) => {
     const sep = entry.indexOf(':');
     const caller = sep > 0 ? entry.slice(0, sep).trim() : '';
@@ -79,7 +82,8 @@ export function validateEnv(rules: EnvRule[], distinct: string[] = []) {
           errors.push((err as Error).message);
         }
       } else if (rule.type === 'url') {
-        if (DEFAULT_CREDENTIALS.test(value)) errors.push(`${rule.key} usa las credenciales de ejemplo (banklite/banklite).`);
+        if (DEFAULT_CREDENTIALS.test(value))
+          errors.push(`${rule.key} usa las credenciales de ejemplo (banklite/banklite).`);
       }
     }
 

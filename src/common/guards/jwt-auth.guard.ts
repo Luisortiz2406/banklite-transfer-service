@@ -5,7 +5,10 @@ import { Request } from 'express';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  constructor(private readonly jwt: JwtService, private readonly config: ConfigService) {}
+  constructor(
+    private readonly jwt: JwtService,
+    private readonly config: ConfigService,
+  ) {}
 
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request>();
