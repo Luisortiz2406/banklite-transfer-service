@@ -4,12 +4,13 @@ import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { TransferRequest } from './entities/transfer-request.entity';
+import { TransfersCatalogController } from './transfers-catalog.controller';
 import { TransfersController } from './transfers.controller';
 import { TransfersService } from './transfers.service';
 
 @Module({
   imports: [ConfigModule, JwtModule.register({}), TypeOrmModule.forFeature([TransferRequest])],
-  controllers: [TransfersController],
+  controllers: [TransfersCatalogController, TransfersController],
   providers: [TransfersService, JwtAuthGuard],
 })
 export class TransfersModule {}

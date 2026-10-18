@@ -28,6 +28,8 @@ export const ACCOUNT_TYPES = ['Ahorros', 'Corriente'] as const;
 
 // Mismo tope por operación que ledger-service (exacto en JavaScript y dentro de numeric(18,2)).
 const MAX_AMOUNT = 999_999_999_999.99;
+// Valor mínimo por envío (lo publica GET /transfers/catalog y lo dicen los términos).
+export const TRANSFER_MIN = 1_000;
 
 export class PrepareTransferDto {
   @IsUUID()
@@ -60,7 +62,7 @@ export class PrepareTransferDto {
   destinationKey?: string;
 
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0.01)
+  @Min(TRANSFER_MIN, { message: 'El valor mínimo por envío es de $1.000.' })
   @Max(MAX_AMOUNT)
   amount: number;
 
