@@ -8,6 +8,9 @@ export const EXTERNAL_BANKS = [
 export const WALLETS: readonly string[] = ['Nequi', 'DaviPlata'];
 export const ACCOUNT_TYPES = ['Ahorros', 'Corriente'] as const;
 
+// Mismo tope por operación que ledger-service (exacto en JavaScript y dentro de numeric(18,2)).
+const MAX_AMOUNT = 999_999_999_999.99;
+
 export class PrepareTransferDto {
   @IsUUID()
   sourceAccountId: string;
@@ -40,7 +43,7 @@ export class PrepareTransferDto {
 
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
-  @Max(9999999999999999)
+  @Max(MAX_AMOUNT)
   amount: number;
 
   @IsUUID()
