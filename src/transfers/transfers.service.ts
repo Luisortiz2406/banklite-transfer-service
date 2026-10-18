@@ -1,18 +1,15 @@
 import {
-  BadGatewayException,
   BadRequestException,
   ForbiddenException,
   ConflictException,
-  HttpException,
   Injectable,
   NotFoundException,
-  ServiceUnavailableException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PrepareTransferDto, WALLETS } from './dto/prepare-transfer.dto';
 import { TransferRequest } from './entities/transfer-request.entity';
+import { TransferClientsService } from './transfer-clients.service';
 
 // Una confirmación que lleva más de esto en 'processing' se considera abandonada
 // (p. ej. el servicio se reinició a mitad de camino) y puede reintentarse. Es
@@ -30,7 +27,7 @@ function normalizeKey(raw: string): string {
 export class TransfersService {
   constructor(
     @InjectRepository(TransferRequest) private readonly requests: Repository<TransferRequest>,
-    private readonly config: ConfigService,
+    private readonly clients: TransferClientsService,
   ) {}
 
   async prepare(dto: PrepareTransferDto, userId: string) {
@@ -54,7 +51,7 @@ export class TransfersService {
       destination = { accountNumber: '', key: null, holderName: dto.recipientName.trim() };
     } else if (dto.destinationKey) {
       // Con llave Bre-B, account-service dice a qué cuenta llega (por la red interna).
-      destination = await this.resolveKey(dto.destinationKey);
+      destination = await this.clients.resolveKey(dto.destinationKey);
     } else {
       if (!/^\d{11}$/.test(dto.destinationAccountNumber ?? '')) {
         throw new BadRequestException('El número de cuenta Banklite debe tener 11 dígitos.');
@@ -95,7 +92,7 @@ export class TransfersService {
     }
 
     // Como en los bancos: sin clave dinámica válida no se mueve dinero.
-    await this.verifyDynamicKey(userId, dynamicCode);
+    await this.clients.verifyDynamicKey(userId, dynamicCode);
 
     // Reclama la solicitud de forma atómica: pendiente, o 'processing' abandonada.
     const claim = await this.requests
@@ -147,35 +144,6 @@ export class TransfersService {
     return this.publicRequest(request);
   }
 
-  /** Valida la clave dinámica con Auth Service (red interna, INTERNAL_API_KEY). */
-  private async verifyDynamicKey(userId: string, code: string): Promise<void> {
-    const baseUrl = this.config.get<string>('AUTH_SERVICE_URL', 'http://localhost:3001');
-    const key = this.config.get<string>('INTERNAL_API_KEY');
-    if (!key) throw new ServiceUnavailableException('INTERNAL_API_KEY no está configurada en Transfer Service.');
-
-    let response: Response;
-    try {
-      response = await fetch(`${baseUrl}/internal/dynamic-key/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-internal-key': key },
-        body: JSON.stringify({ idUser: userId, code }),
-        signal: AbortSignal.timeout(10000),
-      });
-    } catch {
-      throw new ServiceUnavailableException('No se pudo validar la clave dinámica. Inténtalo de nuevo.');
-    }
-
-    const payload = await response.json().catch(() => ({}));
-    if (response.status === 403 && /clave dinámica/i.test(payload?.message || '')) {
-      throw new ForbiddenException(payload.message);
-    }
-    if (!response.ok)
-      throw new ServiceUnavailableException('No se pudo validar la clave dinámica. Inténtalo de nuevo.');
-    if (payload?.valid !== true) {
-      throw new BadRequestException(payload?.message || 'Clave dinámica incorrecta o vencida.');
-    }
-  }
-
   /** Valida los datos de un envío a otro banco o billetera. */
   private externalDestination(dto: PrepareTransferDto) {
     const bank = dto.destinationBank;
@@ -200,21 +168,7 @@ export class TransfersService {
 
   /** La cuenta de origen es del usuario y está activa (account-service, red interna). */
   private async assertOwnAccount(accountId: string, userId: string) {
-    const baseUrl = this.config.get<string>('ACCOUNT_SERVICE_URL', 'http://localhost:3002');
-    const key = this.config.get<string>('INTERNAL_API_KEY');
-    if (!key) throw new ServiceUnavailableException('INTERNAL_API_KEY no está configurada en Transfer Service.');
-    let response: Response;
-    try {
-      response = await fetch(`${baseUrl}/internal/accounts/${encodeURIComponent(accountId)}/ledger-info`, {
-        headers: { 'x-internal-key': key },
-        signal: AbortSignal.timeout(10000),
-      });
-    } catch {
-      throw new ServiceUnavailableException('No se pudo validar tu cuenta. Inténtalo de nuevo.');
-    }
-    if (response.status === 404) throw new NotFoundException('Cuenta de origen no encontrada.');
-    if (!response.ok) throw new ServiceUnavailableException('No se pudo validar tu cuenta. Inténtalo de nuevo.');
-    const account = await response.json();
+    const account = await this.clients.sourceAccount(accountId);
     if (account.idUser !== userId || account.accountType === 'merchant') {
       throw new ForbiddenException('La cuenta de origen no te pertenece.');
     }
@@ -222,71 +176,27 @@ export class TransfersService {
       throw new BadRequestException('Tu cuenta no está activa, por eso no puedes transferir.');
   }
 
-  private async postToLedger(request: TransferRequest, accessToken: string): Promise<{ id?: string }> {
-    const baseUrl = this.config.get<string>('LEDGER_SERVICE_URL', 'http://localhost:3006');
-    let response: Response;
-    try {
-      // Otro banco: cargo hacia la cuenta de compensación (ledger, red interna);
-      // entre cuentas Banklite: transferencia con el token del cliente.
-      const external = !!request.destinationBank;
-      response = await fetch(`${baseUrl}${external ? '/ledger/internal/debits' : '/ledger/transfers'}`, {
-        method: 'POST',
-        headers: external
-          ? { 'x-internal-key': this.config.get<string>('INTERNAL_API_KEY') ?? '', 'Content-Type': 'application/json' }
-          : { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(
-          external
-            ? {
-                accountId: request.sourceAccountId,
-                amount: Number(request.amount),
-                description: this.externalDescription(request),
-                idempotencyKey: request.idempotencyKey,
-              }
-            : {
-                sourceAccountId: request.sourceAccountId,
-                destinationAccountNumber: request.destinationAccountNumber,
-                amount: Number(request.amount),
-                description: request.description,
-                idempotencyKey: request.idempotencyKey,
-              },
-        ),
-        signal: AbortSignal.timeout(15000),
+  // Otro banco: cargo hacia la cuenta de compensación; entre cuentas Banklite:
+  // transferencia con el token del cliente. Ambos idempotentes por idempotencyKey.
+  private postToLedger(request: TransferRequest, accessToken: string): Promise<{ id?: string }> {
+    if (request.destinationBank) {
+      return this.clients.debitToClearing({
+        accountId: request.sourceAccountId,
+        amount: Number(request.amount),
+        description: this.externalDescription(request),
+        idempotencyKey: request.idempotencyKey,
       });
-    } catch {
-      throw new ServiceUnavailableException('No se pudo contactar Ledger Service. Puedes reintentar la confirmación.');
     }
-
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const message = Array.isArray(payload?.message)
-        ? payload.message.join(', ')
-        : payload?.message || 'Ledger Service rechazó la transferencia.';
-      if (response.status >= 500) throw new BadGatewayException(message);
-      throw new HttpException(message, response.status);
-    }
-    return payload;
-  }
-
-  /** Cuenta destino de una llave Bre-B (account-service, red interna). */
-  private async resolveKey(rawKey: string): Promise<{ accountNumber: string; key: string; holderName: string }> {
-    const baseUrl = this.config.get<string>('ACCOUNT_SERVICE_URL', 'http://localhost:3002');
-    const key = this.config.get<string>('INTERNAL_API_KEY');
-    if (!key) throw new ServiceUnavailableException('INTERNAL_API_KEY no está configurada en Transfer Service.');
-    let response: Response;
-    try {
-      response = await fetch(`${baseUrl}/internal/accounts/keys/resolve?key=${encodeURIComponent(rawKey)}`, {
-        headers: { 'x-internal-key': key },
-        signal: AbortSignal.timeout(10000),
-      });
-    } catch {
-      throw new ServiceUnavailableException('No se pudo consultar la llave Bre-B. Inténtalo de nuevo.');
-    }
-    const payload = await response.json().catch(() => ({}));
-    if (response.status === 404 || response.status === 400) {
-      throw new HttpException(payload?.message || 'No encontramos esa llave en Banklite.', response.status);
-    }
-    if (!response.ok) throw new ServiceUnavailableException('No se pudo consultar la llave Bre-B. Inténtalo de nuevo.');
-    return { accountNumber: payload.accountNumber, key: payload.key, holderName: payload.holderName };
+    return this.clients.transfer(
+      {
+        sourceAccountId: request.sourceAccountId,
+        destinationAccountNumber: request.destinationAccountNumber,
+        amount: Number(request.amount),
+        description: request.description,
+        idempotencyKey: request.idempotencyKey,
+      },
+      accessToken,
+    );
   }
 
   // Descripción en el movimiento: así se reconoce en el historial como transferencia a otro banco.
