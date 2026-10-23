@@ -1,0 +1,44 @@
+# CI de transfer-service: revisa estilo (ESLint + Prettier), compila y corre las pruebas.
+#
+# El despliegue lo hace Railway directamente desde este repositorio (rama main,
+# railway.json en la raíz). Este workflow no despliega: solo valida el código en
+# pull requests y pushes a main.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Lint, formato, build y pruebas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Lint (ESLint)
+        run: npm run lint
+
+      - name: Formato (Prettier)
+        run: npm run format:check
+
+      - name: Compilar
+        run: npm run build
+
+      - name: Pruebas (Jest)
+        run: npm test --if-present
