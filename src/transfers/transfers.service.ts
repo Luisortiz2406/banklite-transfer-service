@@ -7,7 +7,8 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { PrepareTransferDto, WALLETS } from './dto/prepare-transfer.dto';
+import { currentBankName, WALLETS } from './banks';
+import { PrepareTransferDto } from './dto/prepare-transfer.dto';
 import { TransferRequest } from './entities/transfer-request.entity';
 import { TransferClientsService } from './transfer-clients.service';
 
@@ -31,6 +32,8 @@ export class TransfersService {
   ) {}
 
   async prepare(dto: PrepareTransferDto, userId: string) {
+    // Un frontend viejo puede mandar el nombre antiguo de la entidad: se guarda el vigente.
+    if (dto.destinationBank) dto.destinationBank = currentBankName(dto.destinationBank) ?? undefined;
     const existing = await this.requests.findOne({ where: { idempotencyKey: dto.idempotencyKey } });
     if (existing) {
       this.assertSameRequest(existing, dto, userId);
@@ -50,7 +53,7 @@ export class TransfersService {
       await this.assertOwnAccount(dto.sourceAccountId, userId);
       destination = { accountNumber: '', key: null, holderName: dto.recipientName.trim() };
     } else if (dto.destinationKey) {
-      // Con llave Bre-B, account-service dice a qué cuenta llega (por la red interna).
+      // Con llave, account-service dice a qué cuenta llega (por la red interna).
       destination = await this.clients.resolveKey(dto.destinationKey);
     } else {
       if (!/^\d{11}$/.test(dto.destinationAccountNumber ?? '')) {
@@ -208,7 +211,7 @@ export class TransfersService {
 
   private assertSameRequest(request: TransferRequest, dto: PrepareTransferDto, userId: string) {
     const sameDestination = dto.destinationBank
-      ? request.destinationBank === dto.destinationBank &&
+      ? currentBankName(request.destinationBank) === dto.destinationBank &&
         request.externalAccountNumber === dto.destinationAccountNumber
       : dto.destinationKey
         ? request.destinationKey === normalizeKey(dto.destinationKey)
@@ -231,7 +234,8 @@ export class TransfersService {
       destinationAccountNumber:
         request.destinationKey || request.destinationBank ? null : request.destinationAccountNumber,
       destinationAccountLast4: (request.externalAccountNumber || request.destinationAccountNumber).slice(-4),
-      destinationBank: request.destinationBank,
+      // Las solicitudes viejas guardan el nombre antiguo (marca real): se muestra el vigente.
+      destinationBank: currentBankName(request.destinationBank),
       destinationAccountType: request.destinationAccountType,
       destinationKey: request.destinationKey,
       recipientName: request.recipientName,

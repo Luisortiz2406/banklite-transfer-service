@@ -15,7 +15,7 @@ export class TransferRequest {
   @Column({ name: 'destination_account_number', type: 'varchar', length: 11 })
   destinationAccountNumber: string;
 
-  // Envío con llave Bre-B: la llave y el nombre enmascarado del titular. En ese
+  // Envío con llave Banklite: la llave y el nombre enmascarado del titular. En ese
   // caso el número de cuenta destino nunca se le muestra a quien envía.
   @Column({ name: 'destination_key', type: 'varchar', length: 120, nullable: true })
   destinationKey: string | null;
