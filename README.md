@@ -2,7 +2,7 @@
 
 [![Despliegue](https://github.com/Luisortiz2406/banklite-transfer-service/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/Luisortiz2406/banklite-transfer-service/actions/workflows/deploy.yml)
 
-Transferencias del cliente: a cuentas BankLite, con llave Bre-B y a otros bancos (simulado).
+Transferencias del cliente: a cuentas BankLite, con llave Banklite y a otros bancos (simulado, con entidades de nombre inventado «Demo»: ver `src/transfers/banks.ts`).
 
 Parte de **BankLite**, banco digital académico construido con microservicios. Cada
 microservicio tiene su propia base de datos y se comunica con los demás por HTTP
@@ -29,7 +29,7 @@ que reintentar la confirmación no cobre dos veces.
 |---|---|
 | Publica eventos | — |
 | Consume eventos | — |
-| Llama a | account-service: cuenta origen, destino por número o llave Bre-B<br>auth-service: clave dinámica<br>ledger-service: `POST /ledger/transfers` |
+| Llama a | account-service: cuenta origen, destino por número o llave Banklite<br>auth-service: clave dinámica<br>ledger-service: `POST /ledger/transfers` |
 | Lo llaman | api-gateway (rutas `/transfers/*`) |
 | Integraciones externas | — |
 
@@ -168,6 +168,6 @@ despliega desde su propio repositorio.
 | Repositorio | Relación con este servicio |
 |---|---|
 | [banklite-api-gateway](https://github.com/Luisortiz2406/banklite-api-gateway) | **Lo llama:** punto de entrada público, le enruta las rutas de este servicio |
-| [banklite-account-service](https://github.com/Luisortiz2406/banklite-account-service) | **Llama a:** cuentas origen y destino, resolución de llaves Bre-B |
+| [banklite-account-service](https://github.com/Luisortiz2406/banklite-account-service) | **Llama a:** cuentas origen y destino, resolución de llaves Banklite |
 | [banklite-auth-service](https://github.com/Luisortiz2406/banklite-auth-service) | **Llama a:** verificación de la clave dinámica |
 | [banklite-ledger-service](https://github.com/Luisortiz2406/banklite-ledger-service) | **Llama a:** registrar la transferencia (`POST /ledger/transfers`) |
