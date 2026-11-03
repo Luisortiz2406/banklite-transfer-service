@@ -2,7 +2,7 @@
 
 [![Despliegue](https://github.com/Luisortiz2406/banklite-transfer-service/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/Luisortiz2406/banklite-transfer-service/actions/workflows/deploy.yml)
 
-Transferencias del cliente: a cuentas BankLite, con llave Banklite y a otros bancos (simulado, con entidades de nombre inventado «Demo»: ver `src/transfers/banks.ts`).
+Transferencias del cliente: a cuentas BankLite, con llave Banklite y a otros bancos (simulado, con entidades de nombre ficticio: ver `src/transfers/banks.ts`).
 
 Parte de **BankLite**, banco digital académico construido con microservicios. Cada
 microservicio tiene su propia base de datos y se comunica con los demás por HTTP

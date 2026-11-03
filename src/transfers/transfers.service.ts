@@ -206,7 +206,11 @@ export class TransfersService {
   private externalDescription(request: TransferRequest): string {
     const account = `${request.destinationAccountType ? request.destinationAccountType + ' ' : ''}···· ${request.externalAccountNumber.slice(-4)}`;
     const concept = request.description && request.description !== 'Transferencia' ? ` · ${request.description}` : '';
-    return `Transferencia a ${request.destinationBank} · ${account} · ${request.recipientName}${concept}`.slice(0, 140);
+    // Una solicitud preparada con un nombre anterior llega al ledger con el vigente.
+    return `Transferencia a ${currentBankName(request.destinationBank)} · ${account} · ${request.recipientName}${concept}`.slice(
+      0,
+      140,
+    );
   }
 
   private assertSameRequest(request: TransferRequest, dto: PrepareTransferDto, userId: string) {
