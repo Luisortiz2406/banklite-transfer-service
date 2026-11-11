@@ -135,7 +135,30 @@ todas se configuran como variables del servicio, nunca en el código.
 
 ## Pruebas
 
-Las reglas de negocio se prueban de punta a punta con los scripts de `scripts/pruebas/` del repositorio principal.
+```bash
+npm test
+```
+
+Pruebas unitarias con Jest, sin base de datos: `TransfersService` con un repositorio en
+memoria y las llamadas a auth, account y ledger simuladas.
+
+- **Preparar**: entre cuentas Banklite (11 dígitos), con llave Banklite (no muestra el
+  número de quien recibe) y a otro banco o billetera (celular de billetera, tipo de
+  cuenta, nombre, cuenta de origen propia, activa y que no sea de comercio).
+- **Idempotencia**: la misma clave con los mismos datos devuelve la misma solicitud;
+  con otros datos u otro usuario da 409; la carrera al guardar devuelve la ganadora.
+- **Confirmar**: sin clave dinámica válida no se reclama ni se llama al ledger; si el
+  ledger falla vuelve a pendiente y el reintento usa la misma clave; una completada no
+  mueve dinero otra vez; procesando, cancelada u otro cliente no confirman; a otro banco
+  el cargo va a compensación con solo los últimos 4 dígitos en la descripción.
+- **Nombres anteriores de las entidades**: un nombre antiguo se guarda y se muestra con el
+  vigente, se cobra con el vigente y no rompe la idempotencia de la misma clave.
+- **Cancelar y listar**: solo pendientes; cada cliente ve solo las suyas.
+- **Validación del DTO**: monto mínimo de $1.000 y 2 decimales, UUID, cuenta o llave,
+  solo dígitos, entidades y tipos de cuenta de la lista.
+
+Las reglas de negocio también se prueban de punta a punta con los scripts de
+`scripts/pruebas/` del repositorio principal.
 
 ## Despliegue
 

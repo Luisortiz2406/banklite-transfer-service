@@ -24,4 +24,6 @@ jobs:
     uses: Luisortiz2406/banklite-pipelines/.github/workflows/servicio.yml@v1
     with:
       servicio: transfer-service
+      umbral-lineas: 43
+      umbral-ramas: 40
     secrets: inherit
