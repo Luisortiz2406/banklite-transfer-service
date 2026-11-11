@@ -44,8 +44,17 @@ describe('Validación de PrepareTransferDto', () => {
 
   it('rechaza una entidad o un tipo de cuenta que no están en la lista', async () => {
     expect(await errors({ ...VALID, destinationBank: 'Banco Inventado' })).toEqual(['destinationBank']);
-    expect(await errors({ ...VALID, destinationBank: 'Bancolombia', destinationAccountType: 'Nómina' })).toEqual([
+    expect(await errors({ ...VALID, destinationBank: 'Banco Cordillera', destinationAccountType: 'Nómina' })).toEqual([
       'destinationAccountType',
     ]);
+  });
+
+  it('acepta todas las entidades vigentes y todavía los nombres anteriores', async () => {
+    for (const bank of ['Banco Cordillera', 'Banco Sabanal', 'Billetera Pulso', 'Billetera Brío', 'Otra entidad']) {
+      expect(await errors({ ...VALID, destinationBank: bank })).toEqual([]);
+    }
+    for (const bank of ['Banco Demo Cóndor', 'Billetera Demo Tucán']) {
+      expect(await errors({ ...VALID, destinationBank: bank })).toEqual([]);
+    }
   });
 });

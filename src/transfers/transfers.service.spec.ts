@@ -105,7 +105,7 @@ function dto(overrides: Partial<PrepareTransferDto> = {}): PrepareTransferDto {
 
 function toBank(overrides: Partial<PrepareTransferDto> = {}): PrepareTransferDto {
   return dto({
-    destinationBank: 'Bancolombia',
+    destinationBank: 'Banco Cordillera',
     destinationAccountType: 'Ahorros',
     destinationAccountNumber: '12345678',
     recipientName: 'Carlos Gómez',
@@ -137,7 +137,7 @@ describe('Preparar una transferencia', () => {
     expect(repo.rows.size).toBe(0);
   });
 
-  it('con llave Bre-B: usa la cuenta que resuelve account-service y no muestra su número', async () => {
+  it('con llave Banklite: usa la cuenta que resuelve account-service y no muestra su número', async () => {
     const { service, clients, repo } = setup();
     const result = await service.prepare(
       dto({ destinationAccountNumber: undefined, destinationKey: 'Ana@Correo.com' }),
@@ -157,7 +157,7 @@ describe('Preparar una transferencia', () => {
 
       expect(clients.sourceAccount).toHaveBeenCalledWith(SOURCE);
       expect(result).toMatchObject({
-        destinationBank: 'Bancolombia',
+        destinationBank: 'Banco Cordillera',
         destinationAccountType: 'Ahorros',
         destinationAccountNumber: null,
         destinationAccountLast4: '5678',
@@ -167,13 +167,13 @@ describe('Preparar una transferencia', () => {
 
     it('en una billetera exige un celular de 10 dígitos que empiece por 3', async () => {
       const { service } = setup();
-      const nequi = { destinationBank: 'Nequi', destinationAccountType: undefined };
+      const billetera = { destinationBank: 'Billetera Pulso', destinationAccountType: undefined };
       await expect(
-        service.prepare(toBank({ ...nequi, destinationAccountNumber: '2001234567' }), USER),
+        service.prepare(toBank({ ...billetera, destinationAccountNumber: '2001234567' }), USER),
       ).rejects.toBeInstanceOf(BadRequestException);
       await expect(
-        service.prepare(toBank({ ...nequi, destinationAccountNumber: '3001234567' }), USER),
-      ).resolves.toMatchObject({ destinationBank: 'Nequi', destinationAccountType: null });
+        service.prepare(toBank({ ...billetera, destinationAccountNumber: '3001234567' }), USER),
+      ).resolves.toMatchObject({ destinationBank: 'Billetera Pulso', destinationAccountType: null });
     });
 
     it('en un banco exige el tipo de cuenta', async () => {
@@ -324,7 +324,7 @@ describe('Confirmar una transferencia', () => {
       expect.objectContaining({
         accountId: SOURCE,
         amount: 1500,
-        description: 'Transferencia a Bancolombia · Ahorros ···· 5678 · Carlos Gómez · Arriendo',
+        description: 'Transferencia a Banco Cordillera · Ahorros ···· 5678 · Carlos Gómez · Arriendo',
       }),
     );
     expect(clients.debitToClearing.mock.calls[0][0].description).not.toContain('12345678');
@@ -347,6 +347,61 @@ describe('Cancelar una transferencia', () => {
     await service.confirm(id, USER, TOKEN, '123456');
 
     await expect(service.cancel(id, USER)).rejects.toBeInstanceOf(ConflictException);
+  });
+});
+
+describe('Nombres anteriores de las entidades', () => {
+  // Un frontend viejo o una solicitud guardada antes del cambio de nombres usa el nombre antiguo.
+  it('si llega un nombre antiguo, guarda y muestra el vigente (banco y billetera)', async () => {
+    const { service, repo } = setup();
+    const banco = await service.prepare(toBank({ destinationBank: 'Banco Demo Cóndor' }), USER);
+    const billetera = await service.prepare(
+      toBank({
+        destinationBank: 'Billetera Demo Colibrí',
+        destinationAccountType: undefined,
+        destinationAccountNumber: '3001234567',
+      }),
+      USER,
+    );
+
+    expect(banco.destinationBank).toBe('Banco Cordillera');
+    expect(billetera.destinationBank).toBe('Billetera Pulso');
+    expect([...repo.rows.values()].map((row) => row.destinationBank)).toEqual(['Banco Cordillera', 'Billetera Pulso']);
+  });
+
+  it('una solicitud guardada con el nombre antiguo se muestra y se cobra con el vigente', async () => {
+    const { service, repo, clients } = setup();
+    const { id } = await service.prepare(toBank({ description: 'Arriendo' }), USER);
+    repo.rows.get(id).destinationBank = 'Banco Demo Cóndor';
+
+    const [listed] = await service.list(USER);
+    expect(listed.destinationBank).toBe('Banco Cordillera');
+
+    await service.confirm(id, USER, TOKEN, '123456');
+    expect(clients.debitToClearing.mock.calls[0][0].description).toBe(
+      'Transferencia a Banco Cordillera · Ahorros ···· 5678 · Carlos Gómez · Arriendo',
+    );
+  });
+
+  it('reintentar con la misma clave y el nombre vigente no da 409 si se guardó con el antiguo', async () => {
+    const { service, repo } = setup();
+    const request = toBank();
+    const first = await service.prepare(request, USER);
+    repo.rows.get(first.id).destinationBank = 'Banco Demo Cóndor';
+
+    const again = await service.prepare({ ...request }, USER);
+    expect(again.id).toBe(first.id);
+    expect(repo.rows.size).toBe(1);
+  });
+
+  it('la misma clave con una entidad distinta sí da 409', async () => {
+    const { service } = setup();
+    const request = toBank();
+    await service.prepare(request, USER);
+
+    await expect(service.prepare({ ...request, destinationBank: 'Banco Altamar' }, USER)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
   });
 });
 
