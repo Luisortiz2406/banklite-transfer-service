@@ -10,20 +10,8 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { ACCEPTED_BANKS } from '../banks';
 
-// Entidades de otros bancos y billeteras a las que se puede enviar.
-export const EXTERNAL_BANKS = [
-  'Bancolombia',
-  'Banco de Bogotá',
-  'Davivienda',
-  'BBVA Colombia',
-  'Banco de Occidente',
-  'Nequi',
-  'DaviPlata',
-  'Otra entidad',
-] as const;
-// En las billeteras el "número de cuenta" es el celular.
-export const WALLETS: readonly string[] = ['Nequi', 'DaviPlata'];
 export const ACCOUNT_TYPES = ['Ahorros', 'Corriente'] as const;
 
 // Mismo tope por operación que ledger-service (exacto en JavaScript y dentro de numeric(18,2)).
@@ -36,15 +24,16 @@ export class PrepareTransferDto {
   sourceAccountId: string;
 
   // Número de cuenta (Banklite: 11 dígitos; otro banco: 6 a 16; billetera: celular)
-  // o, en su lugar, una llave Bre-B (destinationKey).
+  // o, en su lugar, una llave Banklite (destinationKey).
   @ValidateIf((dto) => !dto.destinationKey)
   @IsString()
   @Matches(/^\d{6,16}$/, { message: 'El número de cuenta destino debe tener solo dígitos.' })
   destinationAccountNumber?: string;
 
-  // Envío a otro banco o billetera: entidad, tipo de cuenta y titular.
+  // Envío a otro banco o billetera: entidad, tipo de cuenta y titular. Se aceptan
+  // también los nombres antiguos (ver banks.ts) y el servicio los guarda con el nuevo.
   @IsOptional()
-  @IsIn(EXTERNAL_BANKS as unknown as string[], { message: 'Esa entidad no está disponible.' })
+  @IsIn(ACCEPTED_BANKS as string[], { message: 'Esa entidad no está disponible.' })
   destinationBank?: string;
 
   @IsOptional()

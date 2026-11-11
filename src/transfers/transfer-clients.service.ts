@@ -25,7 +25,7 @@ const LEDGER_UNAVAILABLE = 'No se pudo completar la transferencia en este moment
 
 /**
  * Llamadas de transfer-service a otros servicios: clave dinámica (auth), cuenta
- * de origen y llaves Bre-B (account) y asientos (ledger). Solo HTTP: las reglas
+ * de origen y llaves (account) y asientos (ledger). Solo HTTP: las reglas
  * de negocio (dueño, estado, idempotencia) están en TransfersService.
  * Errores: regla común de common/http/internal-http.ts.
  */
@@ -63,7 +63,7 @@ export class TransferClientsService {
     );
   }
 
-  /** Cuenta destino de una llave Bre-B (account-service, red interna). */
+  /** Cuenta destino de una llave Banklite (account-service, red interna). */
   async resolveKey(rawKey: string): Promise<ResolvedKey> {
     const notFound = (status: number) => (r: { message: string }) =>
       new HttpException(r.message || 'No encontramos esa llave en Banklite.', status);
@@ -73,7 +73,7 @@ export class TransferClientsService {
       {
         service: 'Account Service',
         internal: true,
-        unavailable: 'No se pudo consultar la llave Bre-B. Inténtalo de nuevo.',
+        unavailable: 'No se pudo consultar la llave. Inténtalo de nuevo.',
         on: { 400: notFound(400), 404: notFound(404) },
       },
     );
