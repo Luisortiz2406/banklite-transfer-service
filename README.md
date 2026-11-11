@@ -156,6 +156,15 @@ memoria y las llamadas a auth, account y ledger simuladas.
 - **Cancelar y listar**: solo pendientes; cada cliente ve solo las suyas.
 - **Validación del DTO**: monto mínimo de $1.000 y 2 decimales, UUID, cuenta o llave,
   solo dígitos, entidades y tipos de cuenta de la lista.
+- **Llamadas a otros servicios** (`transfer-clients.service.spec.ts`, con `fetch` simulado): un rechazo
+  de negocio del ledger (saldo insuficiente, límite diario) llega al cliente con su estado y
+  mensaje; si el ledger, auth o account fallan o rechazan la clave interna es 503; la clave
+  dinámica incorrecta es 400; las escrituras no se reintentan solas.
+- **Controladores, guard de sesión, `/health` y validación de la configuración.**
+
+**Cobertura:** el pipeline la muestra en el resumen de cada corrida y exige un mínimo de
+70 % de líneas y 50 % de ramas (`umbral-lineas` y `umbral-ramas` en `deploy.yml`). Hoy
+está en 92,9 % de líneas y 89,7 % de ramas.
 
 Las reglas de negocio también se prueban de punta a punta con los scripts de
 `scripts/pruebas/` del repositorio principal.
