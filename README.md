@@ -125,6 +125,7 @@ todas se configuran como variables del servicio, nunca en el código.
 |---|---|---|---|
 | `NODE_ENV` | No | `development` | `development` en local; `production` en Railway (lo fija el Dockerfile). |
 | `PORT` | No | `3008` | Puerto HTTP del servicio. |
+| `METRICS_PORT` | No | `9100` | Puerto de `GET /metrics` (Prometheus), solo para la red privada; **no** es el puerto público (`PORT`). `off` lo apaga. |
 | `DATABASE_URL` | **Sí** (no arranca sin ella) | `postgres://transfer_svc:<DB_PASSWORD_TRANSFER>@localhost:5432/transfer_db` | Conexión a PostgreSQL de **su** base (rol propio, sin acceso a las demás). |
 | `JWT_SECRET` | **Sí** (no arranca sin ella) | — | Firma de los JWT de clientes (el mismo valor que en auth-service). |
 | `LEDGER_SERVICE_URL` | Sí | `http://localhost:3006` | URL interna de ledger-service. |
@@ -132,6 +133,36 @@ todas se configuran como variables del servicio, nunca en el código.
 | `ACCOUNT_SERVICE_URL` | Sí | `http://localhost:3002` | URL interna de account-service. |
 | `INTERNAL_API_KEY` | **Sí** (no arranca sin ella) | — | Clave interna **propia** de este servicio; la manda en `x-internal-key` al llamar a otros. |
 | `HTTP_READ_RETRIES` | No | `1` | Reintentos de las lecturas (GET) a otros servicios; las escrituras no se reintentan. |
+
+## Métricas de negocio (`transfers_total`)
+
+Además de las métricas HTTP y de Node (puerto `METRICS_PORT`, solo red privada), el servicio publica
+`transfers_total{result,reason}`:
+
+- `result="completed"` (`reason="none"`): se cuenta cuando el ledger movió el dinero y la solicitud quedó
+  `completed` (una sola vez; repetir la confirmación de una solicitud completada no vuelve a contar).
+- `result="rejected"`: una solicitud o confirmación que el servicio o el ledger rechazó con un 4xx de negocio.
+  `reason` es de una **lista cerrada** (nunca un mensaje, id, cuenta, monto ni correo):
+
+| `reason` | Dónde se cuenta |
+|---|---|
+| `invalid_destination` | `prepare`: número de cuenta, celular, tipo de cuenta o nombre de destino inválidos. |
+| `key_not_found` | `prepare`: account-service responde 400/404 al resolver la llave. |
+| `not_owner` | `prepare` a otro banco: la cuenta de origen no es del cliente o es de un comercio. |
+| `account_not_found` | `prepare` a otro banco: account-service responde 404 para la cuenta de origen. |
+| `account_inactive` | `prepare` (cuenta de origen no activa) o `confirm` (el ledger dice que una cuenta no está activa). |
+| `idempotency_conflict` | `prepare`: la clave de idempotencia ya se usó para otra solicitud. |
+| `request_not_found` | `confirm`: la solicitud no existe o no es del cliente. |
+| `request_cancelled` | `confirm`: la solicitud fue cancelada. |
+| `already_processing` | `confirm`/`prepare`: la solicitud ya se está procesando. |
+| `dynamic_key_invalid` | `confirm`: auth-service rechaza la clave dinámica (4xx). |
+| `insufficient_funds` | `confirm`: el ledger responde «Saldo insuficiente». |
+| `limit_exceeded` | `confirm`: el ledger responde que se superó el límite diario o mensual. |
+| `ledger_rejected` | `confirm`: cualquier otro 4xx de negocio del ledger. |
+
+No cuentan: los fallos de infraestructura (5xx, sin respuesta, 401 por sesión vencida); en ese caso la solicitud
+vuelve a `pending` y se reintenta, y el error queda en `http_requests_total` con su código de estado.
+Cancelar, listar y repetir una solicitud ya preparada tampoco son rechazos.
 
 ## Pruebas
 
