@@ -193,6 +193,27 @@ memoria y las llamadas a auth, account y ledger simuladas.
   dinámica incorrecta es 400; las escrituras no se reintentan solas.
 - **Controladores, guard de sesión, `/health` y validación de la configuración.**
 
+### Prueba de integración: transferencia de punta a punta con los servicios vecinos
+
+Archivo: `src/transfers/transfers.integration.spec.ts` (suite «Transferencia de punta a punta (HTTP, reglas de negocio y servicios vecinos de verdad)»).
+
+Levanta la app Nest de verdad en un puerto libre y hace peticiones HTTP reales (con el `fetch` nativo, sin dependencias nuevas). Recorre el controlador, el JWT, `TransfersService` y `TransferClientsService` (el cliente HTTP real) hasta tres servicios vecinos que son servidores HTTP locales de verdad (auth, account y ledger): registran cada llamada, así se comprueba el contrato entre servicios (ruta, clave interna, token del cliente, cuerpo e idempotencia). Solo se simula la base de datos (repositorio en memoria); no se toca ningún servicio real y no hace falta Postgres. Casos:
+
+- Entre cuentas Banklite: preparar, confirmar con clave dinámica (auth recibe `idUser`, código y `x-internal-key`), el ledger recibe `POST /ledger/transfers` con el token del cliente y la misma clave de idempotencia; confirmar otra vez no mueve dinero de nuevo; métrica `completed`.
+- Clave dinámica incorrecta: 400, el ledger no se toca y la solicitud sigue pendiente.
+- Saldo insuficiente en el ledger: mismo 400 para el cliente, solicitud pendiente y el reintento se completa con la misma clave de idempotencia.
+- Ledger caído (503): mensaje para reintentar, la solicitud no se pierde y no se cuenta un rechazo.
+- A otra entidad: account valida el dueño de la cuenta de origen y el ledger recibe `POST /ledger/internal/debits` con clave interna y sin token del cliente.
+- Cuenta de origen ajena: 403, no queda solicitud y se cuenta `not_owner`.
+- Con llave Banklite: account resuelve la cuenta; quien envía no ve el número, pero el ledger sí lo recibe.
+- Idempotencia al preparar (misma clave: misma solicitud; otro monto: 409).
+- Seguridad y ciclo de vida: sin token 401, otro cliente 404, cancelada no se confirma, completada no se cancela.
+- Datos inválidos: 400 sin llamar a ningún servicio.
+
+```bash
+npm test -- transfers.integration   # solo esta prueba (no necesita base de datos)
+```
+
 **Cobertura:** el pipeline la muestra en el resumen de cada corrida y exige un mínimo de
 70 % de líneas y 50 % de ramas (`umbral-lineas` y `umbral-ramas` en `deploy.yml`). Hoy
 está en 92,9 % de líneas y 89,7 % de ramas.
