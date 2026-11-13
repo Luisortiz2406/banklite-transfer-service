@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   HttpException,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -627,6 +628,85 @@ describe('Métricas: transfers_total', () => {
       await service.confirm(id, USER, TOKEN, '123456');
 
       expect(await counted(metricsService)).toEqual({ 'rejected:insufficient_funds': 1, 'completed:none': 1 });
+    });
+  });
+
+  describe('contar nunca rompe una transferencia', () => {
+    /** Hace que prom-client lance en cada inc(), como si el registro estuviera dañado. */
+    function breakCounter(metricsService: MetricsService) {
+      const counter = metricsService.registry.getSingleMetric('transfers_total') as Counter;
+      return jest.spyOn(counter, 'inc').mockImplementation(() => {
+        throw new Error('prom-client roto');
+      });
+    }
+
+    it('si contar lanza, la transferencia se completa igual y el cliente recibe la solicitud completada', async () => {
+      const { service, clients, repo, id, metricsService } = await prepared();
+      const inc = breakCounter(metricsService);
+
+      const result = await service.confirm(id, USER, TOKEN, '123456');
+
+      expect(inc).toHaveBeenCalled();
+      expect(result).toMatchObject({ status: 'completed', ledgerTransactionId: 'tx-banklite' });
+      expect(repo.rows.get(id).status).toBe('completed');
+      expect(clients.transfer).toHaveBeenCalledTimes(1);
+    });
+
+    it('si contar lanza, un rechazo llega al cliente con su error original (no con el de la métrica)', async () => {
+      const { service, clients, repo, id, metricsService } = await prepared();
+      breakCounter(metricsService);
+      clients.transfer.mockRejectedValueOnce(http(400, 'Saldo insuficiente.'));
+
+      const error = await service.confirm(id, USER, TOKEN, '123456').catch((e) => e);
+
+      expect(error).toBeInstanceOf(HttpException);
+      expect(error.getStatus()).toBe(400);
+      expect(error.message).toContain('Saldo insuficiente');
+      expect(repo.rows.get(id).status).toBe('pending');
+    });
+
+    it('si contar lanza, los rechazos de prepare y de confirm siguen dando su error de siempre', async () => {
+      const { service, clients, id, metricsService } = await prepared();
+      breakCounter(metricsService);
+      clients.verifyDynamicKey.mockRejectedValueOnce(new BadRequestException('Clave dinámica incorrecta o vencida.'));
+      clients.resolveKey.mockRejectedValueOnce(http(404, 'No encontramos esa llave en Banklite.'));
+      clients.sourceAccount.mockResolvedValueOnce({ idUser: OTHER_USER, accountType: 'savings', status: 'active' });
+
+      await expect(service.confirm(id, USER, TOKEN, '000000')).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.confirm(randomUUID(), USER, TOKEN, '123456')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.prepare(dto({ destinationAccountNumber: '12' }), USER)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      await expect(
+        service.prepare(dto({ destinationAccountNumber: undefined, destinationKey: 'nadie@correo.com' }), USER),
+      ).rejects.toMatchObject({ status: 404 });
+      await expect(service.prepare(toBank(), USER)).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('TransferMetrics: ni completed() ni rejected() lanzan, y avisan en el log', () => {
+      const metricsService = new MetricsService(new ConfigService({}));
+      const metrics = new TransferMetrics(metricsService);
+      const counter = metricsService.registry.getSingleMetric('transfers_total') as Counter;
+      jest.spyOn(counter, 'inc').mockImplementation(() => {
+        throw new Error('roto');
+      });
+      const aviso = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+      expect(() => metrics.completed()).not.toThrow();
+      expect(() => metrics.rejected('insufficient_funds')).not.toThrow();
+
+      expect(aviso).toHaveBeenCalledTimes(2);
+      aviso.mockRestore();
+    });
+
+    it('si la métrica no se pudo crear (nombre duplicado), el servicio arranca y contar no hace nada', () => {
+      const metricsService = new MetricsService(new ConfigService({}));
+      new TransferMetrics(metricsService);
+
+      const segunda = new TransferMetrics(metricsService); // transfers_total ya estaba registrada
+
+      expect(() => segunda.completed()).not.toThrow();
+      expect(() => segunda.rejected('ledger_rejected')).not.toThrow();
     });
   });
 

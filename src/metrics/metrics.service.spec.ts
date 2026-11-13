@@ -94,6 +94,22 @@ describe('MetricsService', () => {
       expect(await service.registry.metrics()).toContain('route="unmatched",method="OTHER",status="404"');
     });
 
+    it('si registrar la petición falla, el evento no lanza (no tumba el proceso) y la petición sigue', async () => {
+      const service = await started();
+      jest.spyOn(service, 'record').mockImplementation(() => {
+        throw new Error('prom-client roto');
+      });
+      const listeners: Record<string, () => void> = {};
+      const res = { statusCode: 200, once: (event: string, cb: () => void) => (listeners[event] = cb) };
+      const next = jest.fn();
+
+      service.middleware()({ method: 'GET', route: { path: '/x' } } as never, res as never, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(() => listeners.finish()).not.toThrow();
+      expect(() => listeners.finish()).not.toThrow();
+    });
+
     it('el middleware registra al terminar la respuesta, con el código real', async () => {
       const service = await started();
       const listeners: Record<string, () => void> = {};

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Counter } from 'prom-client';
 import { MetricsService } from './metrics.service';
 
@@ -31,28 +31,48 @@ export type TransferRejection = (typeof TRANSFER_REJECTIONS)[number];
  *     servicio o el ledger rechazó con un 4xx de negocio.
  * Los fallos de infraestructura (5xx, sin respuesta) NO cuentan: la solicitud vuelve a pendiente y se
  * reintenta; quedan en http_requests_total con su código de estado.
+ *
+ * CONTAR NUNCA ROMPE UNA TRANSFERENCIA: ni el constructor ni completed()/rejected() lanzan jamás. Si
+ * prom-client falla (etiquetas inesperadas, métrica duplicada, registro dañado), se deja un aviso en el
+ * log y el flujo de la transferencia sigue como si nada.
  */
 @Injectable()
 export class TransferMetrics {
-  private readonly transfers: Counter<'result' | 'reason'>;
+  private readonly logger = new Logger('TransferMetrics');
+  private transfers: Counter<'result' | 'reason'> | null = null;
 
   constructor(metrics: MetricsService) {
-    this.transfers = new Counter({
-      name: 'transfers_total',
-      help: 'Transferencias completadas y rechazadas, con el motivo del rechazo (lista cerrada).',
-      labelNames: ['result', 'reason'],
-      registers: [metrics.registry],
-    });
-    // Todas las series existen desde el arranque (en 0): así increase() y rate() ven el primer evento.
-    this.transfers.inc({ result: 'completed', reason: 'none' }, 0);
-    for (const reason of TRANSFER_REJECTIONS) this.transfers.inc({ result: 'rejected', reason }, 0);
+    try {
+      const counter = new Counter({
+        name: 'transfers_total',
+        help: 'Transferencias completadas y rechazadas, con el motivo del rechazo (lista cerrada).',
+        labelNames: ['result', 'reason'],
+        registers: [metrics.registry],
+      });
+      // Todas las series existen desde el arranque (en 0): así increase() y rate() ven el primer evento.
+      counter.inc({ result: 'completed', reason: 'none' }, 0);
+      for (const reason of TRANSFER_REJECTIONS) counter.inc({ result: 'rejected', reason }, 0);
+      this.transfers = counter;
+    } catch (error) {
+      // Sin la métrica el servicio arranca igual: las transferencias no dependen de ella.
+      this.logger.warn(`No se pudo crear transfers_total: ${(error as Error).message}`);
+    }
   }
 
   completed() {
-    this.transfers.inc({ result: 'completed', reason: 'none' });
+    this.count({ result: 'completed', reason: 'none' });
   }
 
   rejected(reason: TransferRejection) {
-    this.transfers.inc({ result: 'rejected', reason });
+    this.count({ result: 'rejected', reason });
+  }
+
+  /** Suma 1; si prom-client falla, solo avisa en el log (nunca lanza). */
+  private count(labels: { result: 'completed' | 'rejected'; reason: string }) {
+    try {
+      this.transfers?.inc(labels);
+    } catch (error) {
+      this.logger.warn(`No se pudo contar la transferencia (${labels.result}): ${(error as Error).message}`);
+    }
   }
 }

@@ -37,6 +37,7 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
   private readonly requests: Counter<'route' | 'method' | 'status'>;
   private readonly duration: Histogram<'route' | 'method'>;
   private server: Server | null = null;
+  private recordFailed = false;
 
   constructor(private readonly config: ConfigService) {
     collectDefaultMetrics({ register: this.registry });
@@ -71,8 +72,17 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
     return (req: Request, res: Response, next: NextFunction) => {
       const start = process.hrtime.bigint();
       res.once('finish', () => {
-        const seconds = Number(process.hrtime.bigint() - start) / 1e9;
-        this.record(req, res.statusCode, seconds);
+        // Un error al contar dentro de este evento no se capturaría en ningún lado y tumbaría el proceso:
+        // contar nunca puede romper una petición. Se avisa una sola vez en el log.
+        try {
+          const seconds = Number(process.hrtime.bigint() - start) / 1e9;
+          this.record(req, res.statusCode, seconds);
+        } catch (error) {
+          if (!this.recordFailed) {
+            this.recordFailed = true;
+            this.logger.warn(`No se pudo registrar una petición en las métricas: ${(error as Error).message}`);
+          }
+        }
       });
       next();
     };

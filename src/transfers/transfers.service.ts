@@ -36,16 +36,41 @@ export class TransfersService {
 
   // ---- Métricas (transfers_total): cada rechazo se cuenta en el punto donde se produce. ----
 
+  /** Contar una transferencia completada nunca puede romperla: el dinero ya se movió. */
+  private safeCompleted() {
+    try {
+      this.metrics.completed();
+    } catch {
+      // ignorar: la métrica no es parte de la transferencia
+    }
+  }
+
+  private safeRejected(reason: TransferRejection) {
+    try {
+      this.metrics.rejected(reason);
+    } catch {
+      // ignorar: la métrica no es parte de la transferencia
+    }
+  }
+
   /** Cuenta un rechazo con su motivo (lista cerrada) y devuelve el error para lanzarlo. */
   private reject<E extends Error>(reason: TransferRejection, error: E): E {
-    this.metrics.rejected(reason);
+    try {
+      this.metrics.rejected(reason);
+    } catch {
+      // Contar nunca cambia el error que recibe el cliente.
+    }
     return error;
   }
 
   /** Cuenta el rechazo solo si otro servicio respondió con un 4xx de negocio; un 5xx o la falta de respuesta no es un rechazo. */
   private rejectIfClientError<E>(reason: TransferRejection, error: E): E {
-    if (error instanceof HttpException && error.getStatus() >= 400 && error.getStatus() < 500) {
-      this.metrics.rejected(reason);
+    try {
+      if (error instanceof HttpException && error.getStatus() >= 400 && error.getStatus() < 500) {
+        this.metrics.rejected(reason);
+      }
+    } catch {
+      // Contar nunca cambia el error que recibe el cliente.
     }
     return error;
   }
@@ -56,16 +81,20 @@ export class TransfersService {
    * vencida) y los 5xx no son rechazos de negocio.
    */
   private ledgerRejection(error: unknown): TransferRejection | null {
-    if (!(error instanceof HttpException)) return null;
-    const status = error.getStatus();
-    if (status < 400 || status >= 500 || status === 401) return null;
-    const response = error.getResponse();
-    const raw = typeof response === 'string' ? response : (response as { message?: string | string[] })?.message;
-    const message = Array.isArray(raw) ? raw.join(' ') : String(raw ?? '');
-    if (/saldo insuficiente/i.test(message)) return 'insufficient_funds';
-    if (/l[ií]mite (diario|mensual)/i.test(message)) return 'limit_exceeded';
-    if (/no est[aá] activa/i.test(message)) return 'account_inactive';
-    return 'ledger_rejected';
+    try {
+      if (!(error instanceof HttpException)) return null;
+      const status = error.getStatus();
+      if (status < 400 || status >= 500 || status === 401) return null;
+      const response = error.getResponse();
+      const raw = typeof response === 'string' ? response : (response as { message?: string | string[] })?.message;
+      const message = Array.isArray(raw) ? raw.join(' ') : String(raw ?? '');
+      if (/saldo insuficiente/i.test(message)) return 'insufficient_funds';
+      if (/l[ií]mite (diario|mensual)/i.test(message)) return 'limit_exceeded';
+      if (/no est[aá] activa/i.test(message)) return 'account_inactive';
+      return 'ledger_rejected';
+    } catch {
+      return null; // clasificar nunca cambia el error que recibe el cliente
+    }
   }
 
   async prepare(dto: PrepareTransferDto, userId: string) {
@@ -167,13 +196,13 @@ export class TransfersService {
       await this.requests.save(request);
       // El dinero se movió y la solicitud quedó completada: se cuenta una sola vez (los reintentos
       // sobre una solicitud ya completada devuelven antes y no vuelven a contar).
-      this.metrics.completed();
+      this.safeCompleted();
       return this.publicRequest(request);
     } catch (error) {
       await this.requests.update({ id, userId, status: 'processing' }, { status: 'pending' });
       // Rechazo de negocio del ledger (4xx): saldo, límite, cuenta inactiva u otra regla.
       const rejection = this.ledgerRejection(error);
-      if (rejection) this.metrics.rejected(rejection);
+      if (rejection) this.safeRejected(rejection);
       throw error;
     }
   }
