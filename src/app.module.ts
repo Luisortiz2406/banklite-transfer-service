@@ -5,9 +5,11 @@ import { HealthController } from './health.controller';
 import { TransferRequest } from './transfers/entities/transfer-request.entity';
 import { TransfersModule } from './transfers/transfers.module';
 import { validateEnv } from './config/env.validation';
+import { MetricsModule } from './metrics/metrics.module';
 
 @Module({
   imports: [
+    MetricsModule,
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
